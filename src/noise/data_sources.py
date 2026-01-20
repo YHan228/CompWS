@@ -6,6 +6,9 @@ See IMPLEMENTATION_PLAN.md Section 2.1 for full specification.
 
 import numpy as np
 import pandas as pd
+import requests_cache
+import yfinance as yf
+from openmeteo_requests import Client
 
 
 class VolatilityFetcher:
@@ -27,7 +30,7 @@ class VolatilityFetcher:
         self.ticker = ticker
         self.start = start
         self.end = end
-        raise NotImplementedError
+        self._series: pd.Series | None = None
 
     def fetch(self) -> pd.Series:
         """
@@ -36,7 +39,12 @@ class VolatilityFetcher:
         Returns:
             pandas Series with datetime index and daily values
         """
-        raise NotImplementedError
+        data = yf.download(self.ticker, start=self.start, end=self.end, progress=False)
+        if data.empty:
+            raise ValueError("No data returned from yfinance for given range.")
+        series = data["Close"].dropna()
+        self._series = series
+        return series
 
     def to_diffusion_coefficients(self, scale: float = 0.01) -> np.ndarray:
         """
@@ -48,7 +56,14 @@ class VolatilityFetcher:
         Returns:
             numpy array of normalized values, shape (T,)
         """
-        raise NotImplementedError
+        series = self._series if self._series is not None else self.fetch()
+        values = series.to_numpy(dtype=float)
+        min_val = float(np.min(values))
+        max_val = float(np.max(values))
+        if np.isclose(max_val, min_val):
+            return np.zeros_like(values, dtype=float)
+        normalized = (values - min_val) / (max_val - min_val)
+        return normalized * scale
 
 
 class WeatherFetcher:
@@ -76,7 +91,7 @@ class WeatherFetcher:
         self.longitude = longitude
         self.start = start
         self.end = end
-        raise NotImplementedError
+        self._series: pd.Series | None = None
 
     def fetch(self, variable: str = "wind_speed_10m_max") -> pd.Series:
         """
@@ -89,7 +104,30 @@ class WeatherFetcher:
         Returns:
             pandas Series with datetime index and daily values
         """
-        raise NotImplementedError
+        url = "https://archive-api.open-meteo.com/v1/archive"
+        session = requests_cache.CachedSession(".openmeteo_cache", expire_after=3600)
+        client = Client(session=session)
+        params = {
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "start_date": self.start,
+            "end_date": self.end,
+            "daily": variable,
+            "timezone": "UTC",
+        }
+        responses = client.weather_api(url, params=params)
+        response = responses[0]
+        daily = response.Daily()
+        values = daily.Variables(0).ValuesAsNumpy()
+        times = pd.date_range(
+            start=pd.to_datetime(daily.Time(), unit="s", utc=True),
+            end=pd.to_datetime(daily.TimeEnd(), unit="s", utc=True),
+            freq=pd.Timedelta(seconds=daily.Interval()),
+            inclusive="left",
+        )
+        series = pd.Series(values, index=times)
+        self._series = series
+        return series
 
     def to_diffusion_coefficients(self, scale: float = 0.01) -> np.ndarray:
         """
@@ -101,4 +139,11 @@ class WeatherFetcher:
         Returns:
             numpy array of normalized values, shape (T,)
         """
-        raise NotImplementedError
+        series = self._series if self._series is not None else self.fetch()
+        values = series.to_numpy(dtype=float)
+        min_val = float(np.min(values))
+        max_val = float(np.max(values))
+        if np.isclose(max_val, min_val):
+            return np.zeros_like(values, dtype=float)
+        normalized = (values - min_val) / (max_val - min_val)
+        return normalized * scale

@@ -31,7 +31,21 @@ def euler_maruyama_ou(
     Returns:
         Trajectory of shape (T, D) or (T, N, D)
     """
-    raise NotImplementedError
+    if sigma_t.size == 0:
+        raise ValueError("sigma_t must contain at least one timestep.")
+    x0 = np.asarray(x0, dtype=float)
+    mu = np.asarray(mu, dtype=float)
+    trajectory = np.zeros((len(sigma_t), *x0.shape), dtype=float)
+    trajectory[0] = x0
+    rng = np.random.default_rng(seed)
+
+    for t in range(1, len(sigma_t)):
+        d_w = rng.standard_normal(size=x0.shape) * np.sqrt(dt)
+        drift = theta * (mu - trajectory[t - 1]) * dt
+        diffusion = sigma_t[t] * d_w
+        trajectory[t] = trajectory[t - 1] + drift + diffusion
+
+    return trajectory
 
 
 def apply_sde_to_points(
@@ -57,7 +71,20 @@ def apply_sde_to_points(
     Returns:
         Weathered point cloud, shape (N, 3) — final state after T steps
     """
-    raise NotImplementedError
+    points = np.asarray(points, dtype=float)
+    if mu_mode == "centroid":
+        mu = points.mean(axis=0)
+    elif mu_mode == "origin":
+        mu = np.zeros(3, dtype=float)
+    elif mu_mode == "self":
+        mu = points
+    else:
+        raise ValueError(f"Unsupported mu_mode: {mu_mode}")
+
+    trajectory = euler_maruyama_ou(
+        points, theta=theta, mu=mu, sigma_t=sigma_t, seed=seed
+    )
+    return trajectory[-1]
 
 
 def get_trajectory(
@@ -76,7 +103,17 @@ def get_trajectory(
     Returns:
         Full trajectory, shape (T, N, 3)
     """
-    raise NotImplementedError
+    points = np.asarray(points, dtype=float)
+    if mu_mode == "centroid":
+        mu = points.mean(axis=0)
+    elif mu_mode == "origin":
+        mu = np.zeros(3, dtype=float)
+    elif mu_mode == "self":
+        mu = points
+    else:
+        raise ValueError(f"Unsupported mu_mode: {mu_mode}")
+
+    return euler_maruyama_ou(points, theta=theta, mu=mu, sigma_t=sigma_t, seed=seed)
 
 
 # --- Geometry Primitives ---
@@ -95,7 +132,15 @@ def create_sphere(n_points: int = 1000, radius: float = 1.0) -> np.ndarray:
     Returns:
         Point cloud, shape (N, 3)
     """
-    raise NotImplementedError
+    indices = np.arange(n_points, dtype=float)
+    phi = (1 + np.sqrt(5)) / 2
+    theta = 2 * np.pi * indices / phi
+    z = 1 - 2 * (indices + 0.5) / n_points
+    radius_xy = np.sqrt(1 - z**2)
+    x = radius_xy * np.cos(theta)
+    y = radius_xy * np.sin(theta)
+    points = np.stack([x, y, z], axis=1) * radius
+    return points
 
 
 def create_cube(n_points: int = 1000, size: float = 1.0) -> np.ndarray:
@@ -109,7 +154,29 @@ def create_cube(n_points: int = 1000, size: float = 1.0) -> np.ndarray:
     Returns:
         Point cloud, shape (N, 3)
     """
-    raise NotImplementedError
+    rng = np.random.default_rng()
+    half = size / 2
+    face_ids = rng.integers(0, 6, size=n_points)
+    u = rng.uniform(-half, half, size=n_points)
+    v = rng.uniform(-half, half, size=n_points)
+    points = np.zeros((n_points, 3), dtype=float)
+
+    for idx in range(n_points):
+        face = face_ids[idx]
+        if face == 0:
+            points[idx] = [half, u[idx], v[idx]]
+        elif face == 1:
+            points[idx] = [-half, u[idx], v[idx]]
+        elif face == 2:
+            points[idx] = [u[idx], half, v[idx]]
+        elif face == 3:
+            points[idx] = [u[idx], -half, v[idx]]
+        elif face == 4:
+            points[idx] = [u[idx], v[idx], half]
+        else:
+            points[idx] = [u[idx], v[idx], -half]
+
+    return points
 
 
 def create_torus(
@@ -126,4 +193,10 @@ def create_torus(
     Returns:
         Point cloud, shape (N, 3)
     """
-    raise NotImplementedError
+    rng = np.random.default_rng()
+    u = rng.uniform(0, 2 * np.pi, size=n_points)
+    v = rng.uniform(0, 2 * np.pi, size=n_points)
+    x = (R + r * np.cos(v)) * np.cos(u)
+    y = (R + r * np.cos(v)) * np.sin(u)
+    z = r * np.sin(v)
+    return np.stack([x, y, z], axis=1)

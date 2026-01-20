@@ -6,6 +6,12 @@
 
 ---
 
+## Progress Log
+
+- Implemented VAE architecture, data fetchers, SDE solvers, visualization utilities, and notebook scaffolding for smoke tests. (2026-01-19)
+
+---
+
 ## Phase 0: Project Setup
 
 ### 0.1 Directory Structure
