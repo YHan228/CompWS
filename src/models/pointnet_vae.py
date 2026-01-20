@@ -72,33 +72,29 @@ class FoldingDecoder(nn.Module):
         self.z_dim = z_dim
         self.n_points = n_points
 
-        # Create 2D grid for folding
+        # Create 2D grid for folding (on unit sphere for better init)
         grid_size = int(np.ceil(np.sqrt(n_points)))
-        u = torch.linspace(-1, 1, grid_size)
-        v = torch.linspace(-1, 1, grid_size)
+        u = torch.linspace(0, 2 * np.pi, grid_size)
+        v = torch.linspace(0, np.pi, grid_size)
         grid_u, grid_v = torch.meshgrid(u, v, indexing='ij')
-        grid = torch.stack([grid_u.flatten(), grid_v.flatten()], dim=1)[:n_points]
-        self.register_buffer('grid', grid)  # (N, 2)
+        # Spherical coordinates as initial grid
+        x = torch.sin(grid_v) * torch.cos(grid_u)
+        y = torch.sin(grid_v) * torch.sin(grid_u)
+        z = torch.cos(grid_v)
+        grid = torch.stack([x.flatten(), y.flatten(), z.flatten()], dim=1)[:n_points]
+        self.register_buffer('grid', grid)  # (N, 3) - spherical init
 
-        # First folding: (z_dim + 2) → 3
-        self.fold1 = nn.Sequential(
-            nn.Linear(z_dim + 2, 128),
+        # Deformation network: (z_dim + 3) → 3 offset
+        self.deform = nn.Sequential(
+            nn.Linear(z_dim + 3, 256),
             nn.ReLU(),
             nn.Dropout(dropout_p),
-            nn.Linear(128, 128),
+            nn.Linear(256, 256),
             nn.ReLU(),
             nn.Dropout(dropout_p),
+            nn.Linear(256, 128),
+            nn.ReLU(),
             nn.Linear(128, 3),
-        )
-
-        # Second folding: (z_dim + 3) → 3 (refine)
-        self.fold2 = nn.Sequential(
-            nn.Linear(z_dim + 3, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout_p),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3),
         )
 
     def forward(self, z: Tensor) -> Tensor:
@@ -113,17 +109,16 @@ class FoldingDecoder(nn.Module):
 
         # Expand latent and grid
         z_exp = z.unsqueeze(1).expand(-1, N, -1)  # (B, N, z_dim)
-        grid_exp = self.grid.unsqueeze(0).expand(B, -1, -1)  # (B, N, 2)
+        grid_exp = self.grid.unsqueeze(0).expand(B, -1, -1)  # (B, N, 3)
 
-        # First folding
-        h = torch.cat([z_exp, grid_exp], dim=2)  # (B, N, z_dim + 2)
-        points1 = self.fold1(h)  # (B, N, 3)
+        # Predict deformation from base grid
+        h = torch.cat([z_exp, grid_exp], dim=2)  # (B, N, z_dim + 3)
+        offset = self.deform(h)  # (B, N, 3)
 
-        # Second folding (refinement)
-        h2 = torch.cat([z_exp, points1], dim=2)  # (B, N, z_dim + 3)
-        points2 = self.fold2(h2)  # (B, N, 3)
+        # Output = base grid + learned offset
+        points = grid_exp + offset
 
-        return points2
+        return points
 
 
 class PointNetVAE(nn.Module):
