@@ -19,9 +19,10 @@ def render_kintsugi(
     variance: np.ndarray,
     gold_color: tuple[int, int, int] = (212, 175, 55),
     variance_threshold: float | None = None,
-    percentile: float = 90.0,
+    percentile: float = 75.0,
     gold_intensity: float = 0.8,
     blur_edges: bool = True,
+    foreground_threshold: float = 0.05,
 ) -> np.ndarray:
     """
     Overlay gold color on high-variance (uncertain) regions.
@@ -32,27 +33,32 @@ def render_kintsugi(
         variance: Per-pixel variance, shape (H, W)
         gold_color: RGB tuple for gold overlay
         variance_threshold: Absolute threshold (if None, use percentile)
-        percentile: Use top X percentile as threshold (default 90th)
+        percentile: Percentile within foreground region (default 75th)
         gold_intensity: Blending factor for gold overlay [0, 1]
         blur_edges: Apply Gaussian blur to mask edges for smoother veins
+        foreground_threshold: Pixels above this in reconstruction are foreground
 
     Returns:
         RGB image as uint8, shape (H, W, 3)
     """
     variance = np.asarray(variance, dtype=np.float32)
-    var_min = float(np.min(variance))
-    var_max = float(np.max(variance))
-    if np.isclose(var_max, var_min):
-        norm_var = np.zeros_like(variance)
-    else:
-        norm_var = (variance - var_min) / (var_max - var_min)
+    reconstruction = np.asarray(reconstruction, dtype=np.float32)
 
+    # Identify foreground region (where the digit is)
+    foreground_mask = reconstruction > foreground_threshold
+
+    # Compute threshold only within foreground to avoid background skewing
     if variance_threshold is None:
-        threshold = np.percentile(norm_var, percentile)
+        if foreground_mask.sum() > 0:
+            foreground_variance = variance[foreground_mask]
+            threshold = np.percentile(foreground_variance, percentile)
+        else:
+            threshold = np.percentile(variance, percentile)
     else:
         threshold = variance_threshold
 
-    mask = norm_var >= threshold
+    # Gold only where variance exceeds threshold (high uncertainty regions)
+    mask = (variance >= threshold) & foreground_mask
     if blur_edges:
         blend_mask = gaussian_filter(mask.astype(np.float32), sigma=1.0)
         blend_mask = np.clip(blend_mask, 0.0, 1.0)
